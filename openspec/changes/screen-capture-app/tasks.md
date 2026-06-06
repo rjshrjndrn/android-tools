@@ -1,7 +1,7 @@
 ## 1. Project Setup
 
-- [ ] 1.1 Initialize Android project with Kotlin, Gradle KTS, target/compile SDK 36, min SDK 29
-- [ ] 1.2 Configure AndroidManifest with permissions (RECORD_AUDIO, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PROJECTION, POST_NOTIFICATIONS) and RecordingService declaration
+- [x] 1.1 Initialize Android project with Kotlin, Gradle KTS, target/compile SDK 36, min SDK 29
+- [x] 1.2 Configure AndroidManifest with permissions (RECORD_AUDIO, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PROJECTION, POST_NOTIFICATIONS) and RecordingService declaration
 
 ## 2. Recording Configuration
 
