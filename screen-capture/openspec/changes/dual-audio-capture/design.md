@@ -59,7 +59,9 @@ Two `AudioRecord` instances on a dedicated thread:
 - Internal audio: `AudioPlaybackCaptureConfiguration` with MediaProjection
   - Uses `AudioFormat.CHANNEL_OUT_MONO` (playback channel, not input)
   - Matches USAGE_MEDIA, USAGE_GAME, USAGE_UNKNOWN
-- Mic: `AudioSource.MIC` (NOT VOICE_COMMUNICATION — it's privacy-sensitive and blocks concurrent capture on some ROMs)
+- Mic: `AudioSource.MIC` (NOT VOICE_COMMUNICATION — AOSP uses VOICE_COMMUNICATION but we use MIC to avoid potential concurrent capture restrictions on vendor ROMs. Trade-off: MIC may behave differently with AudioPlaybackCapture's audio policy on some devices. If issues arise, switch to VOICE_COMMUNICATION with try/catch fallback to MIC.)
+
+**AudioRecord buffer size:** Use `AudioRecord.getMinBufferSize(sampleRate, CHANNEL_IN_MONO, ENCODING_PCM_16BIT) * 2` for both internal and mic AudioRecords. Pass `CHANNEL_IN_MONO` to `getMinBufferSize()` even when the AudioRecord itself uses `CHANNEL_OUT_MONO` — both represent 1 channel, buffer size is identical.
 
 Mix PCM buffers: scale mic 1.4x, add, clamp to Short range.
 
@@ -107,9 +109,17 @@ Three radio buttons:
 
 ### 6. Graceful degradation
 
-- If AudioRecord creation fails (vendor ROM issue): fall back to mic-only, show Toast
+- If AudioRecord creation fails (vendor ROM issue): fall back to mic-only, show Toast. **Catch `Exception` (not just `UnsupportedOperationException`)** — vendor ROMs throw `RuntimeException: registerAudioPolicy() returned -1` (confirmed: scrcpy issue #5138).
 - If one AudioRecord errors mid-recording: fill with zeros, continue (AOSP pattern)
 - If AudioPlaybackCapture returns silence (WebView v147 bug): recording continues with mic audio
+
+### 6a. Foreground service type conditional
+
+`startForeground()` bitmask must match actual audio sources:
+- **internal-only mode:** `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION` only (no mic privacy indicator)
+- **mic-only / both mode:** `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or FOREGROUND_SERVICE_TYPE_MICROPHONE`
+
+Manifest still declares both types statically. The `startForeground()` call selects dynamically.
 
 ### 7. Thread model
 
@@ -130,24 +140,44 @@ No concurrent MediaMuxer writes. No PTS synchronization needed during recording.
 
 Audio encoder drain loop must handle:
 1. `INFO_OUTPUT_FORMAT_CHANGED` → `muxer.addTrack(codec.outputFormat)` → `muxer.start()`
-2. Buffer samples only written AFTER muxer started
-3. End-of-stream: signal `BUFFER_FLAG_END_OF_STREAM`, drain remaining, stop muxer
+2. **Discard `BUFFER_FLAG_CODEC_CONFIG` output buffers** — CSD is already embedded in the track format via `addTrack(codec.outputFormat)`. Writing these to the muxer corrupts the `.m4a` file.
+3. Buffer samples only written AFTER muxer started
+4. End-of-stream: signal `BUFFER_FLAG_END_OF_STREAM`, drain remaining, stop muxer
+
+**PTS formula (mandatory — do NOT use System.nanoTime()):**
+```kotlin
+val ptsUs = (totalSamplesWritten * 1_000_000L) / sampleRate
+```
+Increment `totalSamplesWritten` by the number of short samples fed per `queueInputBuffer()` call.
 
 ### 9. Post-hoc merge details
 
+- **Call `MediaExtractor.selectTrack(i)`** for each desired track before reading — without this, `readSampleData()` silently returns -1 with no exception
 - Select tracks by MIME prefix (`video/`, `audio/`), NOT by index
 - Skip `BUFFER_FLAG_CODEC_CONFIG` samples during merge (already embedded in track format)
+- **Preserve `SAMPLE_FLAG_SYNC` → translate to `MediaCodec.BUFFER_FLAG_KEY_FRAME`** when writing to muxer — dropping flags produces unseekable video
 - MediaRecorder outputs to temp file in cache dir (NOT MediaStore)
 - IS_PENDING=0 set only after merge completes successfully
 - Foreground service stays alive during merge, notification shows "Finishing recording…"
 - Merge runs on background thread to avoid ANR
+- **Merge failure fallback:** copy `temp_video.mp4` content to the pending MediaStore URI and set `IS_PENDING=0` — user gets video-only recording. Do NOT leave `IS_PENDING=1` (invisible to user = data loss).
+
+### 10. Temp file cleanup on startup
+
+In `RecordingService.onCreate()`: delete any stale temp files matching `temp_video*.mp4` and `temp_audio*.m4a` in `cacheDir`. Handles process kill during merge leaving orphaned files.
+
+### 11. Storage availability check
+
+Before creating temp files, check available space in `cacheDir`. A 30-min 1080p recording at 6 Mbps needs ~1.3 GB for temp video + audio. If insufficient space, abort with user-visible error before starting recording.
 
 ## Risks / Trade-offs
 
 - **Post-hoc merge delay**: 1-2 seconds to merge tracks after stop. Acceptable.
-- **Temp file storage**: Need temp files in cache dir. Cleaned up after merge.
+- **A/V sync gap (accepted)**: MediaRecorder and AudioRecord start at different times (50-200ms delta). Both PTS streams start at 0 in their respective temp files. After merge, this produces a small but detectable A/V sync offset. Accepted trade-off of post-hoc muxing — correcting requires recording wall-clock timestamps at pipeline start and adjusting PTS during merge, which adds complexity for minimal perceptual benefit.
+- **Temp file storage**: Need temp files in cache dir. Cleaned up after merge. Stale files cleaned on service startup.
 - **App opt-out**: DRM apps set ALLOW_CAPTURE_BY_NONE — their audio silent. Expected.
 - **Pixel Camera Services quirk**: On GrapheneOS, denying camera permission to Pixel Camera Services can break audio capture. Document workaround.
 - **WebView v147 regression**: AudioPlaybackCapture may return silence (active bug June 2026). Graceful degradation: recording continues with mic-only audio.
-- **VOICE_COMMUNICATION blocked**: Using AudioSource.MIC instead to avoid privacy-sensitive concurrent capture restrictions.
+- **VOICE_COMMUNICATION blocked**: Using AudioSource.MIC instead to avoid privacy-sensitive concurrent capture restrictions on vendor ROMs. Evidence is anecdotal — if MIC causes issues with AudioPlaybackCapture, switch to VOICE_COMMUNICATION with try/catch fallback.
 - **RecordingConfig constants**: MediaRecorder.VideoEncoder.HEVC is integer constant, MediaCodec uses MIME strings. Need conversion for MediaCodec audio encoder setup.
+- **44100 Hz hardcode (accepted)**: Most Android devices have native HAL rate of 48000 Hz; requesting 44100 Hz forces resampling. AOSP's ScreenInternalAudioRecorder also hardcodes 44100 Hz. Minor quality/CPU trade-off, not worth the complexity of dynamic sample rate detection.
