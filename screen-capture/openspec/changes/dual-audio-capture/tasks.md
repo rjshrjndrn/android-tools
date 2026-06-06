@@ -1,8 +1,8 @@
 ## 1. Audio Mode UI
 
-- [ ] 1.1 Add AudioMode enum to RecordingConfig (MIC_ONLY, INTERNAL_ONLY, BOTH)
-- [ ] 1.2 Add radio buttons to MainActivity for audio mode selection
-- [ ] 1.3 Pass audio mode through to RecordingService via intent extra
+- [x] 1.1 Add AudioMode enum to RecordingConfig (MIC_ONLY, INTERNAL_ONLY, BOTH)
+- [x] 1.2 Add radio buttons to MainActivity for audio mode selection
+- [x] 1.3 Pass audio mode through to RecordingService via intent extra
 
 ## 2. Internal Audio Capture
 

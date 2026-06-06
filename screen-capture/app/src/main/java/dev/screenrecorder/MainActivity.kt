@@ -24,6 +24,7 @@ import com.google.android.material.button.MaterialButton
 class MainActivity : AppCompatActivity() {
 
     private lateinit var presetGroup: RadioGroup
+    private lateinit var audioModeGroup: RadioGroup
     private lateinit var recordButton: MaterialButton
     private lateinit var timerText: TextView
 
@@ -63,6 +64,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         presetGroup = findViewById(R.id.presetGroup)
+        audioModeGroup = findViewById(R.id.audioModeGroup)
         recordButton = findViewById(R.id.recordButton)
         timerText = findViewById(R.id.timerText)
 
@@ -151,7 +153,14 @@ class MainActivity : AppCompatActivity() {
             else -> 1
         }
 
-        val intent = RecordingService.startIntent(this, resultCode, resultData, configIndex)
+        val audioMode = when (audioModeGroup.checkedRadioButtonId) {
+            R.id.audioMic -> AudioMode.MIC_ONLY
+            R.id.audioInternal -> AudioMode.INTERNAL_ONLY
+            R.id.audioBoth -> AudioMode.BOTH
+            else -> AudioMode.MIC_ONLY
+        }
+
+        val intent = RecordingService.startIntent(this, resultCode, resultData, configIndex, audioMode)
         startForegroundService(intent)
 
         // Now bind to get service reference for UI updates
@@ -163,6 +172,10 @@ class MainActivity : AppCompatActivity() {
         presetGroup.isEnabled = !recording
         for (i in 0 until presetGroup.childCount) {
             presetGroup.getChildAt(i).isEnabled = !recording
+        }
+        audioModeGroup.isEnabled = !recording
+        for (i in 0 until audioModeGroup.childCount) {
+            audioModeGroup.getChildAt(i).isEnabled = !recording
         }
         timerText.visibility = if (recording) View.VISIBLE else View.GONE
         if (!recording) {

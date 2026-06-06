@@ -38,6 +38,7 @@ class RecordingService : Service() {
 
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_CONFIG_INDEX = "config_index"
+        private const val EXTRA_AUDIO_MODE = "audio_mode"
 
         // Store projection result data here — Intent extras can lose
         // nested Parcelable Intent on newer Android versions
@@ -48,11 +49,13 @@ class RecordingService : Service() {
             resultCode: Int,
             resultData: Intent,
             configIndex: Int,
+            audioMode: AudioMode = AudioMode.MIC_ONLY,
         ): Intent {
             pendingResultData = resultData
             return Intent(context, RecordingService::class.java).apply {
                 putExtra(EXTRA_RESULT_CODE, resultCode)
                 putExtra(EXTRA_CONFIG_INDEX, configIndex)
+                putExtra(EXTRA_AUDIO_MODE, audioMode.name)
             }
         }
     }
@@ -122,6 +125,11 @@ class RecordingService : Service() {
         }
 
         val config = RecordingConfig.PRESETS.getOrElse(configIndex) { RecordingConfig.DEFAULT }
+        val audioMode = try {
+            AudioMode.valueOf(intent?.getStringExtra(EXTRA_AUDIO_MODE) ?: AudioMode.MIC_ONLY.name)
+        } catch (_: IllegalArgumentException) {
+            AudioMode.MIC_ONLY
+        }
 
         startForeground(
             NOTIFICATION_ID,
@@ -129,12 +137,12 @@ class RecordingService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
         )
-        startRecording(resultCode, resultData, config)
+        startRecording(resultCode, resultData, config, audioMode)
 
         return START_NOT_STICKY
     }
 
-    private fun startRecording(resultCode: Int, resultData: Intent, config: RecordingConfig) {
+    private fun startRecording(resultCode: Int, resultData: Intent, config: RecordingConfig, audioMode: AudioMode = AudioMode.MIC_ONLY) {
         val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = projectionManager.getMediaProjection(resultCode, resultData)
 

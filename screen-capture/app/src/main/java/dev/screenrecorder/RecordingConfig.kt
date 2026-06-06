@@ -4,6 +4,12 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaRecorder
 
+enum class AudioMode {
+    MIC_ONLY,
+    INTERNAL_ONLY,
+    BOTH,
+}
+
 data class RecordingConfig(
     val label: String,
     val width: Int,
