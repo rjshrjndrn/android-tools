@@ -10,13 +10,13 @@
 
 ## 3. Recording Service
 
-- [ ] 3.1 Implement RecordingService as foreground service with mediaProjection type and notification channel
-- [ ] 3.2 Create persistent notification with Stop action button
-- [ ] 3.3 Set up MediaProjection with Callback.onStop() registration
-- [ ] 3.4 Create VirtualDisplay at preset resolution connected to MediaRecorder surface
-- [ ] 3.5 Configure MediaRecorder: video source (Surface), audio source (MIC), output format (MP4), video encoder (HEVC), audio encoder (AAC), preset resolution/bitrate/FPS
-- [ ] 3.6 Implement clean stop: stop MediaRecorder, release VirtualDisplay and MediaProjection, stop service
-- [ ] 3.7 Generate timestamp-based output filename in app-specific movies directory
+- [x] 3.1 Implement RecordingService as foreground service with mediaProjection type and notification channel
+- [x] 3.2 Create persistent notification with Stop action button
+- [x] 3.3 Set up MediaProjection with Callback.onStop() registration
+- [x] 3.4 Create VirtualDisplay at preset resolution connected to MediaRecorder surface
+- [x] 3.5 Configure MediaRecorder: video source (Surface), audio source (MIC), output format (MP4), video encoder (HEVC), audio encoder (AAC), preset resolution/bitrate/FPS
+- [x] 3.6 Implement clean stop: stop MediaRecorder, release VirtualDisplay and MediaProjection, stop service
+- [x] 3.7 Generate timestamp-based output filename in app-specific movies directory
 
 ## 4. UI
 
