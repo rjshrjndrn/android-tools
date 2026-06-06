@@ -138,36 +138,34 @@ class InternalAudioRecorder(
     fun stop() {
         isCapturing = false
 
-        // Stop AudioRecords FIRST to unblock read() calls on audio thread
-        internalAudioRecord?.let {
-            try { it.stop() } catch (_: Exception) {}
-        }
-        micAudioRecord?.let {
-            try { it.stop() } catch (_: Exception) {}
-        }
+        // Unblock AudioRecord.read() calls on audio thread
+        internalAudioRecord?.let { try { it.stop() } catch (_: Exception) {} }
+        micAudioRecord?.let { try { it.stop() } catch (_: Exception) {} }
 
-        // Now join — thread can exit quickly since read() is unblocked
-        audioThread?.join(5000)
+        // Wait for audio thread — it owns encoder/muxer shutdown
+        audioThread?.join(8000)
         audioThread = null
 
-        // Release AudioRecords after thread has exited
+        // Release AudioRecords after thread exits
         internalAudioRecord?.release()
         internalAudioRecord = null
         micAudioRecord?.release()
         micAudioRecord = null
 
-        // Encoder and muxer are safe to stop now — thread is done
-        encoder?.let {
-            try {
-                it.stop()
-                it.release()
-            } catch (_: Exception) {}
-        }
+        // Safety cleanup if thread timed out and left resources alive
+        encoder?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
         encoder = null
+        if (muxerStarted) { try { muxer?.stop() } catch (_: Exception) {} }
+        try { muxer?.release() } catch (_: Exception) {}
+        muxer = null
+        muxerStarted = false
+    }
 
-        if (muxerStarted) {
-            try { muxer?.stop() } catch (_: Exception) {}
-        }
+    /** Called by audio thread only — stops encoder + muxer from the owning thread. */
+    private fun shutdownEncoderAndMuxer() {
+        encoder?.let { try { it.stop(); it.release() } catch (_: Exception) {} }
+        encoder = null
+        if (muxerStarted) { try { muxer?.stop() } catch (_: Exception) {} }
         try { muxer?.release() } catch (_: Exception) {}
         muxer = null
         muxerStarted = false
@@ -342,12 +340,17 @@ class InternalAudioRecorder(
                 drainEncoder(false)
             }
 
-            // Task 4.5: Signal EOS and drain
-            signalEndOfStream()
-            drainEncoder(true)
+            // Task 4.5: Signal EOS and drain (only if encoder still running)
+            if (encoder != null) {
+                signalEndOfStream()
+                drainEncoder(true)
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Audio capture loop error", e)
+        } finally {
+            // Audio thread owns shutdown — safe to call here
+            shutdownEncoderAndMuxer()
         }
 
         Log.d(TAG, "Audio capture loop ended, totalSamples=$totalSamplesWritten")
@@ -366,7 +369,7 @@ class InternalAudioRecorder(
         byteBuffer.flip()
 
         var bytesRemaining = byteBuffer.remaining()
-        while (bytesRemaining > 0) {
+        while (bytesRemaining > 0 && isCapturing) {
             // Task 4.4: 10ms timeout with retry (AOSP's 500µs drops PCM under load)
             val bufferIndex = codec.dequeueInputBuffer(10_000)
             if (bufferIndex < 0) continue // retry
@@ -389,16 +392,20 @@ class InternalAudioRecorder(
         }
     }
 
-    // Task 4.5: Signal EOS with retry loop
+    // Task 4.5: Signal EOS with retry loop (bounded — 50 × 10ms = 500ms max)
     private fun signalEndOfStream() {
         val codec = encoder ?: return
 
-        // Retry loop with 10ms timeout — AOSP's 500µs one-shot crashes with
-        // IllegalArgumentException on -1 return under CPU pressure
-        var bufferIndex: Int
-        do {
+        var bufferIndex = -1
+        var attempts = 0
+        while (bufferIndex < 0 && attempts < 50) {
             bufferIndex = codec.dequeueInputBuffer(10_000) // 10ms
-        } while (bufferIndex < 0)
+            attempts++
+        }
+        if (bufferIndex < 0) {
+            Log.w(TAG, "EOS: could not get input buffer after $attempts attempts, skipping")
+            return
+        }
 
         val ptsUs = (totalSamplesWritten * 1_000_000L) / SAMPLE_RATE
         codec.queueInputBuffer(bufferIndex, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
@@ -408,6 +415,8 @@ class InternalAudioRecorder(
     private fun drainEncoder(endOfStream: Boolean) {
         val codec = encoder ?: return
         val info = MediaCodec.BufferInfo()
+        var eosIterations = 0
+        val maxEosIterations = 500 // 500 × 2ms = 1s max EOS drain
 
         while (true) {
             val outputIndex = codec.dequeueOutputBuffer(info, if (endOfStream) 10_000 else 0)
@@ -446,12 +455,17 @@ class InternalAudioRecorder(
                 else -> {
                     // No more output available
                     if (!endOfStream) return
-                    // If EOS, keep draining
+                    // EOS drain: sleep briefly and retry, but respect cancellation
                     if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        if (!endOfStream) return
-                        // Small sleep to avoid busy-wait during EOS drain
-                        Thread.sleep(1)
+                        Thread.sleep(2)
+                        eosIterations++
+                        if (eosIterations >= maxEosIterations) {
+                            Log.w(TAG, "EOS drain timed out after ${eosIterations * 2}ms")
+                            return
+                        }
                     }
+                    // Safety: bail out if encoder was stopped externally
+                    if (encoder == null) return
                 }
             }
         }
