@@ -17,8 +17,7 @@ data class RecordingConfig(
         private fun hasHevcEncoder(): Boolean {
             val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             return codecList.codecInfos.any { info ->
-                !info.isEncoder.not() &&
-                    info.isEncoder &&
+                info.isEncoder &&
                     info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) }
             }
         }

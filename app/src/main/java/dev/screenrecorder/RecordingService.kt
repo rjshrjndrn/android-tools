@@ -9,6 +9,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaRecorder
@@ -59,6 +60,7 @@ class RecordingService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var mediaRecorder: MediaRecorder? = null
     private var outputUri: Uri? = null
+    private var outputPfd: android.os.ParcelFileDescriptor? = null
     private var isRecording = false
     private var startTimeMs = 0L
 
@@ -95,6 +97,11 @@ class RecordingService : Service() {
             return START_NOT_STICKY
         }
 
+        if (isRecording) {
+            Log.w(TAG, "Already recording, ignoring start request")
+            return START_NOT_STICKY
+        }
+
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
         val resultData = pendingResultData
         val configIndex = intent?.getIntExtra(EXTRA_CONFIG_INDEX, 1) ?: 1
@@ -111,7 +118,8 @@ class RecordingService : Service() {
         startForeground(
             NOTIFICATION_ID,
             buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
         )
         startRecording(resultCode, resultData, config)
 
@@ -129,8 +137,14 @@ class RecordingService : Service() {
             }
         }, handler)
 
-        val (uri, fd) = createOutputFile()
+        // Swap dimensions for portrait orientation
+        val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        val vidWidth = if (isPortrait) minOf(config.width, config.height) else maxOf(config.width, config.height)
+        val vidHeight = if (isPortrait) maxOf(config.width, config.height) else minOf(config.width, config.height)
+
+        val (uri, pfd) = createOutputFile()
         outputUri = uri
+        outputPfd = pfd
 
         try {
             val recorder = MediaRecorder(this).apply {
@@ -139,12 +153,12 @@ class RecordingService : Service() {
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setVideoEncoder(config.videoEncoder)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setVideoSize(config.width, config.height)
+                setVideoSize(vidWidth, vidHeight)
                 setVideoFrameRate(config.fps)
                 setVideoEncodingBitRate(config.bitrate)
                 setAudioEncodingBitRate(196_000)
                 setAudioSamplingRate(44100)
-                setOutputFile(fd)
+                setOutputFile(pfd.fileDescriptor)
                 prepare()
             }
             mediaRecorder = recorder
@@ -152,8 +166,8 @@ class RecordingService : Service() {
             val metrics = resources.displayMetrics
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "ScreenRecorder",
-                config.width,
-                config.height,
+                vidWidth,
+                vidHeight,
                 metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 recorder.surface,
@@ -209,6 +223,8 @@ class RecordingService : Service() {
         virtualDisplay = null
         mediaProjection?.stop()
         mediaProjection = null
+        try { outputPfd?.close() } catch (_: Exception) {}
+        outputPfd = null
     }
 
     fun isCurrentlyRecording(): Boolean = isRecording
@@ -217,7 +233,7 @@ class RecordingService : Service() {
         return if (isRecording) System.currentTimeMillis() - startTimeMs else 0
     }
 
-    private fun createOutputFile(): Pair<Uri, java.io.FileDescriptor> {
+    private fun createOutputFile(): Pair<Uri, android.os.ParcelFileDescriptor> {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "REC_$timestamp.mp4")
@@ -227,9 +243,9 @@ class RecordingService : Service() {
         }
         val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IllegalStateException("Failed to create MediaStore entry")
-        val fd = contentResolver.openFileDescriptor(uri, "rw")
+        val pfd = contentResolver.openFileDescriptor(uri, "rw")
             ?: throw IllegalStateException("Failed to open file descriptor")
-        return Pair(uri, fd.fileDescriptor)
+        return Pair(uri, pfd)
     }
 
     private fun createNotificationChannel() {
