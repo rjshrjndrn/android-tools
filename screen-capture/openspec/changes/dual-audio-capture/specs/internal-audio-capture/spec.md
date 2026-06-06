@@ -32,10 +32,17 @@ App captures audio output from other apps using AudioPlaybackCaptureConfiguratio
 - **WHEN** AudioRecord is created for playback capture or mic
 - **THEN** buffer size is `AudioRecord.getMinBufferSize(sampleRate, CHANNEL_IN_MONO, ENCODING_PCM_16BIT) * 2`
 - **THEN** CHANNEL_IN_MONO is used for getMinBufferSize() even when AudioRecord uses CHANNEL_OUT_MONO (both = 1 channel, identical result)
+- **THEN** playback capture AudioRecord (built via AudioRecord.Builder) MUST call `.setBufferSizeInBytes()` — omitting it defaults to minimum (1 frame), causing instant buffer overflow
+
+#### Scenario: AudioRecord recording state validated after start
+- **WHEN** AudioRecord.startRecording() is called
+- **THEN** getRecordingState() is checked to equal RECORDSTATE_RECORDING
+- **THEN** if state is not RECORDING (vendor ROMs like MIUI silently no-op startRecording), fallback to mic-only with Toast
 
 #### Scenario: Mic uses AudioSource.MIC not VOICE_COMMUNICATION
 - **WHEN** both audio sources are active
-- **THEN** mic AudioRecord uses AudioSource.MIC to avoid privacy-sensitive concurrent capture restrictions
+- **THEN** mic AudioRecord uses AudioSource.MIC
+- **THEN** trade-off: MIC does not provide echo cancellation — speaker output may leak into mic in "both" mode. VOICE_COMMUNICATION would prevent this but echo cancellation is a non-goal
 
 #### Scenario: Foreground service type matches audio mode
 - **WHEN** audio mode is internal-only
@@ -45,5 +52,7 @@ App captures audio output from other apps using AudioPlaybackCaptureConfiguratio
 
 #### Scenario: Storage availability checked before recording
 - **WHEN** recording starts with internal or both audio mode
-- **THEN** available space in cacheDir is checked before creating temp files
-- **THEN** if insufficient space (~1.3 GB for 30min 1080p), recording is aborted with user-visible error
+- **THEN** required space is estimated dynamically: `(bitrate * 1800 / 8) + (196000 * 1800 / 8)` with 10% margin
+- **THEN** cacheDir.usableSpace is checked against the estimate
+- **THEN** if insufficient space, recording is aborted with user-visible error
+- **THEN** a flat threshold is NOT used (false rejection on LOW preset which only needs ~250 MB)
