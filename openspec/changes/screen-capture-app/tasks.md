@@ -5,8 +5,8 @@
 
 ## 2. Recording Configuration
 
-- [ ] 2.1 Create RecordingConfig data class with presets (Low/Medium/High) mapping to resolution, bitrate, FPS
-- [ ] 2.2 Add runtime HEVC encoder availability check with H.264 fallback
+- [x] 2.1 Create RecordingConfig data class with presets (Low/Medium/High) mapping to resolution, bitrate, FPS
+- [x] 2.2 Add runtime HEVC encoder availability check with H.264 fallback
 
 ## 3. Recording Service
 
