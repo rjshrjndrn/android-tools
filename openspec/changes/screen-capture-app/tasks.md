@@ -20,10 +20,10 @@
 
 ## 4. UI
 
-- [ ] 4.1 Create MainActivity layout: preset selector (radio group), start/stop button, recording timer
-- [ ] 4.2 Implement MediaProjection consent flow (ActivityResultLauncher → pass result to service)
-- [ ] 4.3 Bind to RecordingService for status updates (recording state, elapsed time)
-- [ ] 4.4 Handle runtime permission requests (RECORD_AUDIO, POST_NOTIFICATIONS)
+- [x] 4.1 Create MainActivity layout: preset selector (radio group), start/stop button, recording timer
+- [x] 4.2 Implement MediaProjection consent flow (ActivityResultLauncher → pass result to service)
+- [x] 4.3 Bind to RecordingService for status updates (recording state, elapsed time)
+- [x] 4.4 Handle runtime permission requests (RECORD_AUDIO, POST_NOTIFICATIONS)
 
 ## 5. Testing
 
