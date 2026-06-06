@@ -2,3 +2,6 @@
 gradle = "latest"
 java = "temurin-17"
 
+[env]
+ANDROID_HOME = "{{env.HOME}}/Library/Android/sdk"
+

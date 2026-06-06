@@ -1,3 +1,5 @@
+export ANDROID_HOME ?= $(HOME)/Library/Android/sdk
+
 APK_DEBUG = app/build/outputs/apk/debug/app-debug.apk
 APK_RELEASE = app/build/outputs/apk/release/app-release-unsigned.apk
 PACKAGE = dev.screenrecorder
