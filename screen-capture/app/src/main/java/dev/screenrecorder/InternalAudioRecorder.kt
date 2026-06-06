@@ -443,6 +443,10 @@ class InternalAudioRecorder(
         var attempts = 0
         while (bufferIndex < 0 && attempts < 50) {
             bufferIndex = codec.dequeueInputBuffer(10_000) // 10ms
+            if (bufferIndex < 0) {
+                // Output pool may still be full — drain to unblock encoder input
+                drainEncoder(false)
+            }
             attempts++
         }
         if (bufferIndex < 0) {
