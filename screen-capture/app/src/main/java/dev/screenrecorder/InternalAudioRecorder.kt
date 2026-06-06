@@ -407,10 +407,15 @@ class InternalAudioRecorder(
         byteBuffer.flip()
 
         var bytesRemaining = byteBuffer.remaining()
-        while (bytesRemaining > 0) {
+        while (bytesRemaining > 0 && isCapturing) {
             // Task 4.4: 10ms timeout with retry (AOSP's 500µs drops PCM under load)
             val bufferIndex = codec.dequeueInputBuffer(10_000)
-            if (bufferIndex < 0) continue // retry
+            if (bufferIndex < 0) {
+                // Input queue full — drain output buffers so encoder can accept more input.
+                // Without this, output pool fills up → dequeueInputBuffer deadlocks forever.
+                drainEncoder(false)
+                continue
+            }
 
             val inputBuffer = codec.getInputBuffer(bufferIndex) ?: continue
             val bytesToWrite = minOf(bytesRemaining, inputBuffer.remaining())
