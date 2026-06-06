@@ -4,11 +4,11 @@ GrapheneOS's built-in screen recorder captures at native device resolution (~2K 
 
 ## What Changes
 
-- New Android app targeting API 35 (Android 16) for Pixel 9 Pro / GrapheneOS
+- New Android app targeting API 36 (Android 16) for Pixel 9 Pro / GrapheneOS
 - Screen recording via MediaProjection with configurable resolution (480p/720p/1080p)
 - H.265 video encoding with configurable bitrate via presets (Low/Medium/High)
-- Dual audio capture: internal audio (AudioPlaybackCapture) + microphone, mixed into single AAC stream
-- MediaCodec + MediaMuxer pipeline for full control over encoding parameters
+- Microphone audio capture (speaker mode for call recording)
+- MediaRecorder pipeline for simplicity and reliability
 - Foreground service with notification-based stop control
 - Unlimited recording duration (until user stops)
 
@@ -16,8 +16,8 @@ GrapheneOS's built-in screen recorder captures at native device resolution (~2K 
 
 ### New Capabilities
 - `video-capture`: VirtualDisplay creation at configurable resolution, H.265 MediaCodec encoding, frame rate control
-- `audio-capture`: Dual AudioRecord (internal + mic) capture, PCM mixing, AAC encoding
-- `recording-service`: Foreground service orchestration, MediaMuxer output, lifecycle management, notification controls
+- `audio-capture`: Microphone audio capture via MediaRecorder
+- `recording-service`: Foreground service orchestration, MediaRecorder lifecycle, notification controls
 - `recording-ui`: Main activity with preset selection (Low/Med/High), start/stop controls, MediaProjection consent flow
 
 ### Modified Capabilities
@@ -27,6 +27,6 @@ GrapheneOS's built-in screen recorder captures at native device resolution (~2K 
 ## Impact
 
 - New Android project with Kotlin, Gradle build system
-- Permissions: `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION`
+- Permissions: `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PROJECTION`, `POST_NOTIFICATIONS`
 - Output: MP4 files saved to device storage
 - Target: single device (Pixel 9 Pro), single OS (GrapheneOS / Android 16)

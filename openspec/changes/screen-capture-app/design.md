@@ -1,20 +1,23 @@
 ## Context
 
-Greenfield Android app for Pixel 9 Pro running GrapheneOS (Android 16 / API 35). No existing codebase. Purpose: screen recording with configurable quality and dual audio capture for recording video calls at reasonable file sizes.
+Greenfield Android app for Pixel 9 Pro running GrapheneOS (Android 16 / API 36). No existing codebase. Purpose: screen recording with configurable quality and mic audio capture for recording video calls at reasonable file sizes.
 
-Android's MediaProjection API provides screen capture. MediaCodec + MediaMuxer give full control over encoding. AudioPlaybackCapture (API 29+) enables internal audio capture alongside microphone.
+Android's MediaProjection API provides screen capture. MediaRecorder provides encoding and muxing in a single API. Mic captures both the user's voice and the other party's audio via speakerphone.
+
+Note: AudioPlaybackCapture cannot capture `USAGE_VOICE_COMMUNICATION` audio for non-system apps. Internal call audio capture would require Shizuku + AudioPolicy API — deferred to a future enhancement.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Record screen at user-selected resolution (480p/720p/1080p) instead of native 2K
-- Capture both internal audio and microphone, mixed into single stream
+- Capture mic audio (user voice + speakerphone bleed)
 - Encode with H.265 for smaller files
 - Simple preset-based UI (Low/Medium/High)
 - Run as foreground service with notification stop control
 - Unlimited duration recording
 
 **Non-Goals:**
+- Internal audio capture (requires system-level privileges)
 - Publishing to Play Store / F-Droid
 - Supporting multiple Android versions or devices
 - Video editing, trimming, or post-processing
@@ -24,43 +27,29 @@ Android's MediaProjection API provides screen capture. MediaCodec + MediaMuxer g
 
 ## Decisions
 
-### 1. MediaCodec + MediaMuxer over MediaRecorder
+### 1. MediaRecorder over MediaCodec + MediaMuxer
 
-**Decision:** Use MediaCodec for encoding + MediaMuxer for muxing, not MediaRecorder.
+**Decision:** Use MediaRecorder for encoding and muxing.
 
-**Rationale:** MediaRecorder accepts only one audio source. We need two (internal + mic) mixed together. MediaCodec gives direct control over encoder configuration and accepts raw PCM input.
+**Rationale:** With mic-only audio, there's no need for dual AudioRecord + PCM mixing. MediaRecorder handles encoding (video + audio) and muxing (MP4) in a single API. Simpler code, fewer threads, fewer failure modes.
 
-**Alternative:** MediaRecorder with single audio source — rejected because we need both sides of a call.
+**Alternative:** MediaCodec + MediaMuxer — rejected. Only needed for dual audio mixing which is deferred. Adds threading complexity (ring buffers, mixer thread) for no benefit.
 
 ### 2. H.265 (HEVC) as video codec
 
-**Decision:** Use HEVC encoder (`video/hevc`).
+**Decision:** Use HEVC encoder via `MediaRecorder.VideoEncoder.HEVC`.
 
 **Rationale:** ~40-50% smaller files than H.264 at equivalent quality. Pixel 9 Pro has hardware HEVC encoder. Playback supported everywhere that matters.
 
-**Alternative:** H.264 — simpler, wider compat, but significantly larger files. Not needed since target is single device.
+**Alternative:** H.264 — fallback if HEVC unavailable at runtime.
 
-### 3. PCM mixing in a dedicated thread
-
-**Decision:** Two AudioRecord instances read into ring buffers. A mixer thread reads both, adds samples with clamping, and feeds mixed PCM to the audio MediaCodec encoder.
-
-```
-Thread: AudioRecord(internal) → ringBuffer1 ─┐
-                                               ├→ MixerThread → AudioEncoder
-Thread: AudioRecord(mic) → ringBuffer2 ───────┘
-```
-
-**Rationale:** AudioRecord.read() is blocking. Separate threads prevent one source from starving the other. Ring buffers decouple read timing from mix timing.
-
-**Alternative:** Single-threaded sequential reads — risks buffer overruns if one source blocks.
-
-### 4. VirtualDisplay at target resolution
+### 3. VirtualDisplay at target resolution
 
 **Decision:** Create VirtualDisplay at the selected preset resolution (e.g., 720p), not at native resolution.
 
-**Rationale:** Android composites and scales the screen content to fit the VirtualDisplay dimensions. This means the encoder receives frames already at target resolution — no post-capture downscaling needed.
+**Rationale:** Android composites and scales the screen content to fit the VirtualDisplay dimensions. Encoder receives frames already at target resolution — no post-capture downscaling needed.
 
-### 5. Presets over manual controls
+### 4. Presets over manual controls
 
 **Decision:** Three presets (Low/Medium/High) mapping to fixed resolution + bitrate + FPS combinations.
 
@@ -72,17 +61,21 @@ Thread: AudioRecord(mic) → ringBuffer2 ───────┘
 
 **Rationale:** "Just me" app — presets are faster than fiddling with sliders. Medium preset is the primary use case (720p call recording).
 
-### 6. Single MP4 file, no segmentation
+### 5. MediaProjection.Callback registration
 
-**Decision:** Write to single MP4 via MediaMuxer. No file splitting.
+**Decision:** Register `MediaProjection.Callback` with `onStop()` handler before calling `createVirtualDisplay()`.
 
-**Rationale:** At Medium preset, ~1.2 GB/hr. A 4-hour call = ~5 GB. Acceptable. Segmentation adds complexity (gapless concat, timestamp continuity). Not worth it for personal use.
+**Rationale:** Android 14+ mandates this. Without it: `IllegalStateException`. The callback handles cleanup when the system revokes the projection (e.g., user revokes from settings).
 
-**Risk:** Crash during recording = potentially corrupt MP4 (moov atom at end). Acceptable for personal use — alternative (fragmented MP4) adds significant complexity.
+### 6. Storage via app-specific directory
+
+**Decision:** Save recordings to `getExternalFilesDir(Environment.DIRECTORY_MOVIES)`.
+
+**Rationale:** No extra permissions needed on Android 10+ scoped storage. User can access via file manager. Avoids MediaStore complexity for a personal app.
 
 ## Risks / Trade-offs
 
-- **[Crash = lost recording]** → MediaMuxer writes moov atom on stop(). Crash before stop = corrupt file. Mitigation: none for v1, accept the risk. Could add fragmented MP4 later.
-- **[Audio sync drift]** → Two separate AudioRecords may drift over long recordings. Mitigation: both use same sample rate (44100Hz), mixer thread processes in lockstep. Monitor in testing.
-- **[GrapheneOS permission restrictions]** → GrapheneOS may have additional MediaProjection restrictions. Mitigation: test early. If blocked, fall back to internal-audio-only mode.
-- **[HEVC encoder availability]** → Assumed hardware HEVC encoder on Pixel 9 Pro. Mitigation: check at runtime, fall back to H.264.
+- **[Audio quality via speaker]** → Mic captures room noise + echo alongside call audio. Acceptable for personal archival. Enhancement path: Shizuku + AudioPolicy API for clean internal audio.
+- **[Crash = lost recording]** → MediaRecorder writes moov atom on stop(). Crash before stop = corrupt file. Acceptable for personal use. Enhancement path: fragmented MP4 via media3.
+- **[HEVC encoder availability]** → Assumed hardware HEVC on Pixel 9 Pro. Check at runtime, fall back to H.264.
+- **[GrapheneOS restrictions]** → Test MediaProjection consent flow early. No known blockers but GrapheneOS hardens security.
