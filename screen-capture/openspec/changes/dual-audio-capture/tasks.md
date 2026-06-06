@@ -30,15 +30,15 @@
 
 ## 5. Post-hoc Merge Utility
 
-- [ ] 5.1 Create ScreenRecordingMuxer: call `MediaExtractor.selectTrack(i)` for each desired track, then iterate by MIME prefix (video/, audio/), NOT by index. Without selectTrack(), readSampleData() silently returns -1
-- [ ] 5.2 Skip BUFFER_FLAG_CODEC_CONFIG samples during merge. Preserve SAMPLE_FLAG_SYNC → translate to BUFFER_FLAG_KEY_FRAME when writing to muxer (dropping sync flags = unseekable video)
-- [ ] 5.3 For internal-only: copy video track (from temp_video) + copy internal audio track (from temp_audio)
-- [ ] 5.4 For both: copy video track (from temp_video) + copy pre-mixed audio track (from temp_audio) — no decode/re-encode
-- [ ] 5.0 Validate temp files before merge: check temp_video exists and size > 0. If invalid, skip merge (see 6.6 for fallback)
-- [ ] 5.1a Read rotation from temp_video via `MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION`, call `muxer.setOrientationHint(degrees)` BEFORE `muxer.start()`. Without this, portrait recordings become landscape
-- [ ] 5.5 Write merged output to `temp_merged.mp4` in cacheDir (NOT directly to MediaStore FD). Only after temp_merged is fully written and closed, copy content to MediaStore URI and set IS_PENDING=0. Prevents partial writes on merge failure
-- [ ] 5.6 Clean up temp files in cache dir after successful merge
-- [ ] 5.7 Handle merge failure: copy temp_video.mp4 content to the pending MediaStore URI, set IS_PENDING=0 — user gets video-only recording. Log error. Do NOT leave IS_PENDING=1 (invisible to user = data loss). Delete the failed merge output if any
+- [x] 5.1 Create ScreenRecordingMuxer: call `MediaExtractor.selectTrack(i)` for each desired track, then iterate by MIME prefix (video/, audio/), NOT by index. Without selectTrack(), readSampleData() silently returns -1
+- [x] 5.2 Skip BUFFER_FLAG_CODEC_CONFIG samples during merge. Preserve SAMPLE_FLAG_SYNC → translate to BUFFER_FLAG_KEY_FRAME when writing to muxer (dropping sync flags = unseekable video)
+- [x] 5.3 For internal-only: copy video track (from temp_video) + copy internal audio track (from temp_audio)
+- [x] 5.4 For both: copy video track (from temp_video) + copy pre-mixed audio track (from temp_audio) — no decode/re-encode
+- [x] 5.0 Validate temp files before merge: check temp_video exists and size > 0. If invalid, skip merge (see 6.6 for fallback)
+- [x] 5.1a Read rotation from temp_video via `MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION`, call `muxer.setOrientationHint(degrees)` BEFORE `muxer.start()`. Without this, portrait recordings become landscape
+- [x] 5.5 Write merged output to `temp_merged.mp4` in cacheDir (NOT directly to MediaStore FD). Only after temp_merged is fully written and closed, copy content to MediaStore URI and set IS_PENDING=0. Prevents partial writes on merge failure
+- [x] 5.6 Clean up temp files in cache dir after successful merge
+- [x] 5.7 Handle merge failure: copy temp_video.mp4 content to the pending MediaStore URI, set IS_PENDING=0 — user gets video-only recording. Log error. Do NOT leave IS_PENDING=1 (invisible to user = data loss). Delete the failed merge output if any
 
 ## 6. Service Integration
 
