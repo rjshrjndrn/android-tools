@@ -65,43 +65,38 @@ Mix PCM buffers: scale mic 1.4x, add, clamp to Short range.
 
 Handle unequal read sizes: track buffer offsets, use `shiftToStart()` pattern from AOSP.
 
-### 3. One codepath — MediaCodec pipeline for ALL modes
+### 3. Architecture per mode (AOSP pattern)
 
-~~Keep MediaRecorder for mic-only~~ → **No.** One recording pipeline, fewer bugs.
-- Mic only: single AudioRecord (MIC) → MediaCodec AAC
-- Internal only: single AudioRecord (playback capture) → MediaCodec AAC  
-- Both: dual AudioRecord → mix → MediaCodec AAC
-
-Video always via MediaRecorder (keeps VirtualDisplay → Surface simple). Internal audio track muxed post-hoc.
-
-Wait — revised approach: **Use MediaRecorder for video+mic always** (it handles VirtualDisplay, encoding, muxing natively). Only add the internal audio track via AudioPlaybackCapture + post-hoc merge. This minimizes changes.
-
-### 4. Revised architecture (minimal change)
+MediaRecorder handles video. Audio handling depends on mode:
 
 ```
 MODE: mic-only
 ══════════════
-MediaRecorder → final.mp4 (current behavior, zero changes)
+MediaRecorder (video + mic) → final.mp4
+(current behavior, zero changes)
 
 MODE: internal-only  
 ═══════════════════
 MediaRecorder (video only, no audio source) → temp_video.mp4
 AudioPlaybackCapture → AudioRecord → MediaCodec AAC → MediaMuxer → temp_audio.m4a
-Post-hoc merge → final.mp4
+Post-hoc merge: copy video track + copy audio track → final.mp4
 
 MODE: both
 ══════════
-MediaRecorder (video + mic) → temp_video.mp4
-AudioPlaybackCapture → AudioRecord → MediaCodec AAC → MediaMuxer → temp_audio.m4a
-Post-hoc merge:
-  - Extract video track from temp_video.mp4
-  - Extract mic audio track from temp_video.mp4
-  - Extract internal audio track from temp_audio.m4a
-  - Mix mic + internal audio tracks (or keep as separate tracks)
-  → final.mp4
+MediaRecorder (video only, no audio source) → temp_video.mp4
+AudioPlaybackCapture → AudioRecord #1 ──┐
+                                         ├─ real-time PCM mix → MediaCodec AAC → MediaMuxer → temp_audio.m4a
+                   MIC → AudioRecord #2 ─┘
+Post-hoc merge: copy video track + copy pre-mixed audio track → final.mp4
 ```
 
-This is even simpler — MediaRecorder handles video+mic as it does today. Only new code: internal audio capture + post-hoc merge.
+**Key: In "both" mode, MediaRecorder records VIDEO ONLY.** All audio (mic + internal)
+is mixed in real-time on the audio thread and written to temp_audio.m4a.
+Post-hoc merge copies tracks — NO decode+re-encode needed.
+This matches AOSP's ScreenInternalAudioRecorder pattern exactly.
+
+**Same MediaProjection instance** used for both VirtualDisplay and AudioPlaybackCapture.
+No new token requested.
 
 ### 5. Audio mode selection in UI
 
@@ -121,13 +116,31 @@ Three radio buttons:
 ```
 Main Thread          ── UI updates, timer
 MediaRecorder        ── handles video + optional mic (existing)
-Audio Thread (new)   ── reads AudioPlaybackCapture AudioRecord,
+Audio Thread (new)   ── reads AudioRecord(s), mixes PCM,
                         feeds MediaCodec AAC encoder,
-                        writes to temp MediaMuxer
-Post-hoc merge       ── runs after stop, before marking MediaStore complete
+                        handles INFO_OUTPUT_FORMAT_CHANGED → addTrack → muxer.start(),
+                        drains encoder output to temp MediaMuxer
+Merge Thread         ── background thread after stop, merges temp files,
+                        writes final MP4 to MediaStore, sets IS_PENDING=0
 ```
 
-No concurrent MediaMuxer writes. No PTS synchronization needed during recording. Merge handles track alignment.
+No concurrent MediaMuxer writes. No PTS synchronization needed during recording.
+
+### 8. MediaCodec drain sequence (critical)
+
+Audio encoder drain loop must handle:
+1. `INFO_OUTPUT_FORMAT_CHANGED` → `muxer.addTrack(codec.outputFormat)` → `muxer.start()`
+2. Buffer samples only written AFTER muxer started
+3. End-of-stream: signal `BUFFER_FLAG_END_OF_STREAM`, drain remaining, stop muxer
+
+### 9. Post-hoc merge details
+
+- Select tracks by MIME prefix (`video/`, `audio/`), NOT by index
+- Skip `BUFFER_FLAG_CODEC_CONFIG` samples during merge (already embedded in track format)
+- MediaRecorder outputs to temp file in cache dir (NOT MediaStore)
+- IS_PENDING=0 set only after merge completes successfully
+- Foreground service stays alive during merge, notification shows "Finishing recording…"
+- Merge runs on background thread to avoid ANR
 
 ## Risks / Trade-offs
 
