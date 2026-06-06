@@ -6,27 +6,27 @@
 
 ## 2. Internal Audio Capture
 
-- [ ] 2.1 Create AudioPlaybackCaptureConfiguration with USAGE_MEDIA, USAGE_GAME, USAGE_UNKNOWN using the SAME MediaProjection instance as VirtualDisplay
-- [ ] 2.2 Create AudioRecord via `AudioRecord.Builder` with `.setBufferSizeInBytes(getMinBufferSize(44100, CHANNEL_IN_MONO, ENCODING_PCM_16BIT) * 2)`. AudioFormat: CHANNEL_OUT_MONO, 44100Hz, PCM_16BIT. Must use `.setBufferSizeInBytes()` on Builder — omitting it defaults to minimum (1 frame = instant overflow)
-- [ ] 2.3 Wrap AudioRecord creation in `catch (e: Exception)` — NOT just UnsupportedOperationException. Vendor ROMs throw `RuntimeException: registerAudioPolicy() returned -1`. Fallback to mic-only mode with Toast
-- [ ] 2.4 After `startRecording()`, verify `getRecordingState() == RECORDSTATE_RECORDING`. Vendor ROMs (MIUI) silently no-op startRecording() — state stays STOPPED, all read() return ERROR_INVALID_OPERATION. If state != RECORDING, fallback to mic-only with Toast
-- [ ] 2.5 Create dedicated audio capture thread
+- [x] 2.1 Create AudioPlaybackCaptureConfiguration with USAGE_MEDIA, USAGE_GAME, USAGE_UNKNOWN using the SAME MediaProjection instance as VirtualDisplay
+- [x] 2.2 Create AudioRecord via `AudioRecord.Builder` with `.setBufferSizeInBytes(getMinBufferSize(44100, CHANNEL_IN_MONO, ENCODING_PCM_16BIT) * 2)`. AudioFormat: CHANNEL_OUT_MONO, 44100Hz, PCM_16BIT. Must use `.setBufferSizeInBytes()` on Builder — omitting it defaults to minimum (1 frame = instant overflow)
+- [x] 2.3 Wrap AudioRecord creation in `catch (e: Exception)` — NOT just UnsupportedOperationException. Vendor ROMs throw `RuntimeException: registerAudioPolicy() returned -1`. Fallback to mic-only mode with Toast
+- [x] 2.4 After `startRecording()`, verify `getRecordingState() == RECORDSTATE_RECORDING`. Vendor ROMs (MIUI) silently no-op startRecording() — state stays STOPPED, all read() return ERROR_INVALID_OPERATION. If state != RECORDING, fallback to mic-only with Toast
+- [x] 2.5 Create dedicated audio capture thread
 
 ## 3. PCM Mixing (both mode)
 
-- [ ] 3.1 In both mode: MediaRecorder records VIDEO ONLY (no audio source)
-- [ ] 3.2 Create two AudioRecords on audio thread: one for AudioPlaybackCapture, one for MIC (AudioSource.MIC, NOT VOICE_COMMUNICATION). Both use buffer size `getMinBufferSize() * 2`
-- [ ] 3.3 Read from both AudioRecords, handle unequal read sizes with offset tracking and shiftToStart(). **Fix AOSP bug:** use `shiftToStart(buffer, minShorts, readShortsTotal)` — AOSP passes old offset as end, silently dropping samples on unequal reads
-- [ ] 3.4 Mix PCM: scale mic buffer 1.4x, add to internal buffer, clamp to Short.MIN/MAX
-- [ ] 3.5 If one source errors mid-recording, fill its buffer with zeros and continue. **If BOTH sources return error/EOF, break loop and call endStream()** — do NOT zero-fill both (infinite silence loop)
+- [x] 3.1 In both mode: MediaRecorder records VIDEO ONLY (no audio source)
+- [x] 3.2 Create two AudioRecords on audio thread: one for AudioPlaybackCapture, one for MIC (AudioSource.MIC, NOT VOICE_COMMUNICATION). Both use buffer size `getMinBufferSize() * 2`
+- [x] 3.3 Read from both AudioRecords, handle unequal read sizes with offset tracking and shiftToStart(). **Fix AOSP bug:** use `shiftToStart(buffer, minShorts, readShortsTotal)` — AOSP passes old offset as end, silently dropping samples on unequal reads
+- [x] 3.4 Mix PCM: scale mic buffer 1.4x, add to internal buffer, clamp to Short.MIN/MAX
+- [x] 3.5 If one source errors mid-recording, fill its buffer with zeros and continue. **If BOTH sources return error/EOF, break loop and call endStream()** — do NOT zero-fill both (infinite silence loop)
 
 ## 4. Audio Encoding to Temp File
 
-- [ ] 4.1 Create MediaCodec AAC encoder (196kbps, 44100Hz, mono). MediaFormat MUST include: `KEY_AAC_PROFILE = AACObjectLC` (hardware encoders fail without it) and `KEY_PCM_ENCODING = ENCODING_PCM_16BIT` (some API 29-31 devices default to FLOAT)
-- [ ] 4.2 Create MediaMuxer for temp audio file in cache dir — do NOT start yet
-- [ ] 4.3 Implement drain loop: handle INFO_OUTPUT_FORMAT_CHANGED → addTrack() → muxer.start() before any writeSampleData. **Discard BUFFER_FLAG_CODEC_CONFIG output buffers** — CSD already in track format, writing them corrupts .m4a
-- [ ] 4.4 Feed mixed/single-source PCM to encoder input buffers. Compute PTS BEFORE incrementing: `ptsUs = (totalSamplesWritten * 1_000_000L) / sampleRate`, then `totalSamplesWritten += samplesInBatch`. Use 10ms dequeueInputBuffer timeout with retry on -1 (AOSP's 500µs silently drops PCM under load). Do NOT use System.nanoTime()
-- [ ] 4.5 On stop: signal EOS with dequeueInputBuffer retry loop (10ms timeout, spin until >= 0 — AOSP's 500µs one-shot crashes with IllegalArgumentException on -1 return under CPU pressure). Drain remaining output buffers, stop muxer
+- [x] 4.1 Create MediaCodec AAC encoder (196kbps, 44100Hz, mono). MediaFormat MUST include: `KEY_AAC_PROFILE = AACObjectLC` (hardware encoders fail without it) and `KEY_PCM_ENCODING = ENCODING_PCM_16BIT` (some API 29-31 devices default to FLOAT)
+- [x] 4.2 Create MediaMuxer for temp audio file in cache dir — do NOT start yet
+- [x] 4.3 Implement drain loop: handle INFO_OUTPUT_FORMAT_CHANGED → addTrack() → muxer.start() before any writeSampleData. **Discard BUFFER_FLAG_CODEC_CONFIG output buffers** — CSD already in track format, writing them corrupts .m4a
+- [x] 4.4 Feed mixed/single-source PCM to encoder input buffers. Compute PTS BEFORE incrementing: `ptsUs = (totalSamplesWritten * 1_000_000L) / sampleRate`, then `totalSamplesWritten += samplesInBatch`. Use 10ms dequeueInputBuffer timeout with retry on -1 (AOSP's 500µs silently drops PCM under load). Do NOT use System.nanoTime()
+- [x] 4.5 On stop: signal EOS with dequeueInputBuffer retry loop (10ms timeout, spin until >= 0 — AOSP's 500µs one-shot crashes with IllegalArgumentException on -1 return under CPU pressure). Drain remaining output buffers, stop muxer
 
 ## 5. Post-hoc Merge Utility
 
