@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.app.Activity
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
@@ -102,13 +103,20 @@ class RecordingService : Service() {
             return START_NOT_STICKY
         }
 
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
+        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
         val resultData = pendingResultData
         val configIndex = intent?.getIntExtra(EXTRA_CONFIG_INDEX, 1) ?: 1
         pendingResultData = null
 
-        if (resultCode == -1 || resultData == null) {
+        if (resultCode != Activity.RESULT_OK || resultData == null) {
             Log.e(TAG, "Missing MediaProjection result: code=$resultCode data=$resultData")
+            // Must still call startForeground before stopping to avoid crash
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
             stopSelf()
             return START_NOT_STICKY
         }
