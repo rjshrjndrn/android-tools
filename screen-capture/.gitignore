@@ -11,3 +11,6 @@
 
 # Override global gitignore that excludes **/main
 !**/src/main/
+
+# Memory / tool databases
+*.db

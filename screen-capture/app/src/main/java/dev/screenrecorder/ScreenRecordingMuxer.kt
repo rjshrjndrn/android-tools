@@ -164,10 +164,12 @@ object ScreenRecordingMuxer {
                 continue
             }
 
-            // Normalize PTS: subtract first sample time so track starts at 0
+            // Normalize PTS: subtract first sample time so track starts at 0.
+            // firstPts assigned AFTER CODEC_CONFIG skip — those have bogus PTS.
+            // coerceAtLeast(0): B-frame decode-order delivery could produce pts < firstPts.
             val rawPts = extractor.sampleTime
             if (firstPts == Long.MIN_VALUE) firstPts = rawPts
-            val normalizedPts = rawPts - firstPts
+            val normalizedPts = (rawPts - firstPts).coerceAtLeast(0)
 
             // Task 5.2: Preserve SAMPLE_FLAG_SYNC → BUFFER_FLAG_KEY_FRAME
             var flags = 0
