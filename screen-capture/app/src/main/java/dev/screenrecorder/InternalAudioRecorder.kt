@@ -13,6 +13,8 @@ import android.util.Log
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * Captures internal audio (and optionally mic) via AudioPlaybackCapture API,
@@ -37,6 +39,12 @@ class InternalAudioRecorder(
     private var encoder: MediaCodec? = null
     private var muxer: MediaMuxer? = null
     private var audioThread: Thread? = null
+    private var internalReaderThread: Thread? = null
+    private var micReaderThread: Thread? = null
+
+    // Queues between reader threads and mix/encode thread
+    private val internalQueue = ArrayBlockingQueue<ShortArray>(64)
+    private val micQueue = ArrayBlockingQueue<ShortArray>(64)
 
     @Volatile
     private var isCapturing = false
@@ -123,7 +131,26 @@ class InternalAudioRecorder(
         if (audioMode == AudioMode.MIC_ONLY || effectiveMode == AudioMode.MIC_ONLY) return
 
         isCapturing = true
-        // Task 2.5: Dedicated audio capture thread
+
+        // Separate reader thread for internal audio — blocking read won't starve mic
+        internalReaderThread = Thread({
+            internalReaderLoop()
+        }, "InternalAudioReader").apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+
+        // Separate reader thread for mic (BOTH mode only)
+        if (effectiveMode == AudioMode.BOTH) {
+            micReaderThread = Thread({
+                micReaderLoop()
+            }, "MicAudioReader").apply {
+                priority = Thread.MAX_PRIORITY
+                start()
+            }
+        }
+
+        // Mix + encode thread consumes from queues
         audioThread = Thread({
             captureLoop()
         }, "AudioCaptureThread").apply {
@@ -138,15 +165,24 @@ class InternalAudioRecorder(
     fun stop() {
         isCapturing = false
 
-        // Unblock AudioRecord.read() calls on audio thread
+        // Stop AudioRecords to unblock blocking read() calls in reader threads
         internalAudioRecord?.let { try { it.stop() } catch (_: Exception) {} }
         micAudioRecord?.let { try { it.stop() } catch (_: Exception) {} }
 
-        // Wait for audio thread — it owns encoder/muxer shutdown
+        // Join reader threads first (they feed the queues)
+        internalReaderThread?.join(3000)
+        internalReaderThread = null
+        micReaderThread?.join(3000)
+        micReaderThread = null
+
+        // Poison the internal queue so captureLoop unblocks if waiting
+        internalQueue.offer(ShortArray(0))
+
+        // Wait for mix/encode thread — it owns encoder/muxer shutdown
         audioThread?.join(8000)
         audioThread = null
 
-        // Release AudioRecords after thread exits
+        // Release AudioRecords after threads exit
         internalAudioRecord?.release()
         internalAudioRecord = null
         micAudioRecord?.release()
@@ -245,102 +281,85 @@ class InternalAudioRecorder(
         )
     }
 
+    /** Reads from internalAudioRecord and puts chunks into internalQueue. */
+    private fun internalReaderLoop() {
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val buf = ShortArray(bufferSize)
+        while (isCapturing) {
+            val read = internalAudioRecord?.read(buf, 0, bufferSize) ?: AudioRecord.ERROR
+            if (read < 0) {
+                Log.e(TAG, "Internal AudioRecord read error: $read")
+                break
+            }
+            if (read > 0) {
+                internalQueue.offer(buf.copyOf(read), 200, TimeUnit.MILLISECONDS)
+            }
+        }
+        Log.d(TAG, "internalReaderLoop exited")
+    }
+
+    /** Reads from micAudioRecord and puts chunks into micQueue. Exits silently on error. */
+    private fun micReaderLoop() {
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val buf = ShortArray(bufferSize)
+        while (isCapturing) {
+            val read = micAudioRecord?.read(buf, 0, bufferSize) ?: AudioRecord.ERROR
+            if (read < 0) {
+                Log.w(TAG, "Mic AudioRecord read error: $read — mic will be silent")
+                break
+            }
+            if (read > 0) {
+                micQueue.offer(buf.copyOf(read), 200, TimeUnit.MILLISECONDS)
+            }
+        }
+        Log.d(TAG, "micReaderLoop exited")
+    }
+
     /**
-     * Main capture loop running on audio thread.
-     * Reads PCM from AudioRecord(s), mixes if both mode, encodes to AAC.
+     * Mix + encode loop. Consumes from internalQueue (blocking) and micQueue (non-blocking).
+     * Internal audio drives timing; mic is zero-filled when not available.
      */
     private fun captureLoop() {
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
-        val internalBuffer = ShortArray(bufferSize)
-        val micBuffer = if (effectiveMode == AudioMode.BOTH) ShortArray(bufferSize) else null
         val mixedBuffer = ShortArray(bufferSize)
-
-        // Offset tracking for unequal reads
-        var internalOffset = 0
-        var micOffset = 0
 
         try {
             while (isCapturing) {
-                val internalRead = internalAudioRecord?.read(
-                    internalBuffer, internalOffset, bufferSize - internalOffset
-                ) ?: AudioRecord.ERROR
+                // Block until internal audio is available (200ms timeout to check isCapturing)
+                val internalChunk = internalQueue.poll(200, TimeUnit.MILLISECONDS)
+                    ?: continue
 
-                val micRead = if (effectiveMode == AudioMode.BOTH && micBuffer != null) {
-                    micAudioRecord?.read(
-                        micBuffer, micOffset, bufferSize - micOffset
-                    ) ?: AudioRecord.ERROR
+                // Poison pill: empty array signals stop()
+                if (internalChunk.isEmpty()) break
+
+                if (effectiveMode == AudioMode.BOTH) {
+                    // Non-blocking mic poll — zero-fill if not available yet
+                    val micChunk = micQueue.poll()
+                    val count = internalChunk.size
+                    for (i in 0 until count) {
+                        val internal = internalChunk[i].toInt()
+                        val mic = if (micChunk != null && i < micChunk.size)
+                            (micChunk[i] * MIC_VOLUME_SCALE).toInt() else 0
+                        val mixed = internal + mic
+                        mixedBuffer[i] = mixed.coerceIn(
+                            Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()
+                        ).toShort()
+                    }
+                    feedEncoder(mixedBuffer, count)
                 } else {
-                    0
+                    // INTERNAL_ONLY: feed raw internal chunk
+                    feedEncoder(internalChunk, internalChunk.size)
                 }
 
-                if (effectiveMode == AudioMode.BOTH && micBuffer != null) {
-                    // Task 3.5: Both sources error → break loop
-                    val internalError = internalRead < 0
-                    val micError = micRead < 0
-
-                    if (internalError && micError) {
-                        Log.e(TAG, "Both audio sources errored, ending capture")
-                        break
-                    }
-
-                    val internalTotal = if (internalError) internalOffset else internalOffset + internalRead
-                    val micTotal = if (micError) micOffset else micOffset + micRead
-
-                    // Task 3.5: Fill errored source with zeros
-                    if (internalError) {
-                        internalBuffer.fill(0, internalOffset, internalOffset + (micTotal - micOffset).coerceAtLeast(0))
-                    }
-                    if (micError) {
-                        micBuffer.fill(0, micOffset, micOffset + (internalTotal - internalOffset).coerceAtLeast(0))
-                    }
-
-                    // Task 3.3: Handle unequal read sizes
-                    val minSamples = minOf(
-                        if (internalError) internalTotal else internalTotal,
-                        if (micError) micTotal else micTotal
-                    )
-
-                    if (minSamples > 0) {
-                        // Task 3.4: Mix PCM — scale mic 1.4x, add, clamp
-                        for (i in 0 until minSamples) {
-                            val mixed = internalBuffer[i].toInt() + (micBuffer[i] * MIC_VOLUME_SCALE).toInt()
-                            mixedBuffer[i] = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-                        }
-
-                        feedEncoder(mixedBuffer, minSamples)
-
-                        // Task 3.3: shiftToStart with correct params (AOSP bug fix)
-                        if (internalTotal > minSamples) {
-                            System.arraycopy(internalBuffer, minSamples, internalBuffer, 0, internalTotal - minSamples)
-                            internalOffset = internalTotal - minSamples
-                        } else {
-                            internalOffset = 0
-                        }
-                        if (micTotal > minSamples) {
-                            System.arraycopy(micBuffer, minSamples, micBuffer, 0, micTotal - minSamples)
-                            micOffset = micTotal - minSamples
-                        } else {
-                            micOffset = 0
-                        }
-                    }
-                } else {
-                    // Internal-only mode
-                    if (internalRead < 0) {
-                        Log.e(TAG, "Internal AudioRecord read error: $internalRead")
-                        break
-                    }
-                    if (internalRead > 0) {
-                        feedEncoder(internalBuffer, internalRead)
-                    }
-                }
-
-                // Drain encoder output
                 drainEncoder(false)
             }
 
-            // Task 4.5: Signal EOS and drain (only if encoder still running)
             if (encoder != null) {
                 signalEndOfStream()
                 drainEncoder(true)
@@ -349,7 +368,6 @@ class InternalAudioRecorder(
         } catch (e: Exception) {
             Log.e(TAG, "Audio capture loop error", e)
         } finally {
-            // Audio thread owns shutdown — safe to call here
             shutdownEncoderAndMuxer()
         }
 
