@@ -12,6 +12,7 @@ import android.media.projection.MediaProjection
 import android.util.Log
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Captures internal audio (and optionally mic) via AudioPlaybackCapture API,
@@ -136,21 +137,26 @@ class InternalAudioRecorder(
      */
     fun stop() {
         isCapturing = false
+
+        // Stop AudioRecords FIRST to unblock read() calls on audio thread
+        internalAudioRecord?.let {
+            try { it.stop() } catch (_: Exception) {}
+        }
+        micAudioRecord?.let {
+            try { it.stop() } catch (_: Exception) {}
+        }
+
+        // Now join — thread can exit quickly since read() is unblocked
         audioThread?.join(5000)
         audioThread = null
 
-        internalAudioRecord?.let {
-            try { it.stop() } catch (_: Exception) {}
-            it.release()
-        }
+        // Release AudioRecords after thread has exited
+        internalAudioRecord?.release()
         internalAudioRecord = null
-
-        micAudioRecord?.let {
-            try { it.stop() } catch (_: Exception) {}
-            it.release()
-        }
+        micAudioRecord?.release()
         micAudioRecord = null
 
+        // Encoder and muxer are safe to stop now — thread is done
         encoder?.let {
             try {
                 it.stop()
@@ -351,8 +357,9 @@ class InternalAudioRecorder(
     private fun feedEncoder(samples: ShortArray, count: Int) {
         val codec = encoder ?: return
 
-        // Convert shorts to bytes
-        val byteBuffer = ByteBuffer.allocate(count * 2)
+        // Convert shorts to bytes (MUST use native byte order — Java defaults to BIG_ENDIAN
+        // but MediaCodec expects LITTLE_ENDIAN PCM on Android)
+        val byteBuffer = ByteBuffer.allocate(count * 2).order(ByteOrder.nativeOrder())
         for (i in 0 until count) {
             byteBuffer.putShort(samples[i])
         }
