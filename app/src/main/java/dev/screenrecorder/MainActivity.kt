@@ -98,8 +98,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Bind without BIND_AUTO_CREATE — only connects if service
+        // is already running (started via startForegroundService)
         Intent(this, RecordingService::class.java).also { intent ->
-            bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            bindService(intent, connection, 0)
         }
     }
 
@@ -151,6 +153,9 @@ class MainActivity : AppCompatActivity() {
 
         val intent = RecordingService.startIntent(this, resultCode, resultData, configIndex)
         startForegroundService(intent)
+
+        // Now bind to get service reference for UI updates
+        bindService(Intent(this, RecordingService::class.java), connection, 0)
     }
 
     private fun updateUI(recording: Boolean) {
