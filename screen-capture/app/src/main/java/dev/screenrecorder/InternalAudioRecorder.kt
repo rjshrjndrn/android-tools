@@ -46,6 +46,11 @@ class InternalAudioRecorder(
     private val internalQueue = ArrayBlockingQueue<ShortArray>(64)
     private val micQueue = ArrayBlockingQueue<ShortArray>(64)
 
+    // Accumulator for leftover mic samples between mix iterations
+    // Prevents mic data loss when chunk sizes differ between AudioRecord sources
+    private val micAccum = ShortArray(8192) // ~185ms at 44100Hz
+    private var micAccumUsed = 0
+
     @Volatile
     private var isCapturing = false
     private var muxerStarted = false
@@ -339,18 +344,33 @@ class InternalAudioRecorder(
                 if (internalChunk.isEmpty()) break
 
                 if (effectiveMode == AudioMode.BOTH) {
-                    // Non-blocking mic poll — zero-fill if not available yet
-                    val micChunk = micQueue.poll()
+                    // Drain mic queue into accumulator (non-blocking)
+                    // Leftover from previous iteration stays in micAccum[0..micAccumUsed)
+                    var micPoll = micQueue.poll()
+                    while (micPoll != null && micAccumUsed + micPoll.size <= micAccum.size) {
+                        System.arraycopy(micPoll, 0, micAccum, micAccumUsed, micPoll.size)
+                        micAccumUsed += micPoll.size
+                        micPoll = micQueue.poll()
+                    }
+
                     val count = internalChunk.size
                     for (i in 0 until count) {
                         val internal = internalChunk[i].toInt()
-                        val mic = if (micChunk != null && i < micChunk.size)
-                            (micChunk[i] * MIC_VOLUME_SCALE).toInt() else 0
+                        val mic = if (i < micAccumUsed)
+                            (micAccum[i] * MIC_VOLUME_SCALE).toInt() else 0
                         val mixed = internal + mic
                         mixedBuffer[i] = mixed.coerceIn(
                             Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()
                         ).toShort()
                     }
+
+                    // Consume used samples, shift remainder to front of accumulator
+                    val used = minOf(count, micAccumUsed)
+                    if (micAccumUsed > count) {
+                        System.arraycopy(micAccum, count, micAccum, 0, micAccumUsed - count)
+                    }
+                    micAccumUsed = maxOf(0, micAccumUsed - count)
+
                     feedEncoder(mixedBuffer, count)
                 } else {
                     // INTERNAL_ONLY: feed raw internal chunk
@@ -387,7 +407,7 @@ class InternalAudioRecorder(
         byteBuffer.flip()
 
         var bytesRemaining = byteBuffer.remaining()
-        while (bytesRemaining > 0 && isCapturing) {
+        while (bytesRemaining > 0) {
             // Task 4.4: 10ms timeout with retry (AOSP's 500µs drops PCM under load)
             val bufferIndex = codec.dequeueInputBuffer(10_000)
             if (bufferIndex < 0) continue // retry
