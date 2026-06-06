@@ -139,6 +139,7 @@ object ScreenRecordingMuxer {
 
     /**
      * Copy samples from extractor to muxer for a given track.
+     * Normalizes PTS to start at 0 (MediaRecorder internal clock ≠ 0).
      * Task 5.2: Skip CODEC_CONFIG, preserve SAMPLE_FLAG_SYNC → BUFFER_FLAG_KEY_FRAME
      */
     private fun copyTrack(
@@ -149,6 +150,8 @@ object ScreenRecordingMuxer {
         bufferInfo: MediaCodec.BufferInfo,
         isCancelled: () -> Boolean,
     ) {
+        var firstPts = Long.MIN_VALUE
+
         while (!isCancelled()) {
             val sampleSize = extractor.readSampleData(buffer, 0)
             if (sampleSize < 0) break
@@ -161,13 +164,18 @@ object ScreenRecordingMuxer {
                 continue
             }
 
+            // Normalize PTS: subtract first sample time so track starts at 0
+            val rawPts = extractor.sampleTime
+            if (firstPts == Long.MIN_VALUE) firstPts = rawPts
+            val normalizedPts = rawPts - firstPts
+
             // Task 5.2: Preserve SAMPLE_FLAG_SYNC → BUFFER_FLAG_KEY_FRAME
             var flags = 0
             if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                 flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
             }
 
-            bufferInfo.set(0, sampleSize, extractor.sampleTime, flags)
+            bufferInfo.set(0, sampleSize, normalizedPts, flags)
             muxer.writeSampleData(trackIndex, buffer, bufferInfo)
             extractor.advance()
         }
